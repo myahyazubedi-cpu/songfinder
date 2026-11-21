@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Song Finder</title>
+  <style>
+    :root {
+      --bg: #0f1115; --card: #181b22; --text: #eef0f4; --muted: #9aa1ad;
+      --accent: #1db954; --border: #262b35;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    header {
+      position: sticky; top: 0; z-index: 10; background: rgba(15,17,21,.92);
+      backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+      padding: 16px;
+    }
+    .bar { max-width: 720px; margin: 0 auto; display: flex; gap: 8px; }
+    h1 { max-width: 720px; margin: 0 auto 12px; font-size: 20px; }
+    input {
+      flex: 1; min-width: 0; padding: 12px 14px; font-size: 16px; color: var(--text);
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px; outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    select {
+      padding: 0 10px; font-size: 15px; color: var(--text); background: var(--card);
+      border: 1px solid var(--border); border-radius: 10px; outline: none;
+    }
+    button {
+      cursor: pointer; border: 0; border-radius: 10px; font-size: 15px; font-weight: 600;
+    }
+    .go { padding: 0 20px; background: var(--accent); color: #04130a; }
+    main { max-width: 720px; margin: 0 auto; padding: 16px; }
+    .status { text-align: center; color: var(--muted); padding: 24px 0; }
+    .status.error { color: #ff7b7b; }
+    .song {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px; margin-bottom: 12px;
+    }
+    .row { display: flex; gap: 14px; align-items: center; }
+    .song img, .noimg {
+      width: 72px; height: 72px; border-radius: 8px; object-fit: cover; flex: none; background: var(--border);
+    }
+    .info { flex: 1; min-width: 0; }
+    .name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .meta { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
+    .actions a, .actions button {
+      font-size: 13px; padding: 6px 12px; border-radius: 999px; text-decoration: none;
+      font-weight: 600;
+    }
+    .actions a { background: var(--accent); color: #04130a; }
+    .actions button { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .actions button:hover { border-color: var(--accent); }
+    iframe { width: 100%; height: 80px; border: 0; border-radius: 12px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎵 Song Finder</h1>
+    <form class="bar" id="form">
+      <select id="mode" aria-label="Search by">
+        <option value="lyrics">Lyrics</option>
+        <option value="title">Song / artist</option>
+      </select>
+      <input id="q" type="search" placeholder="Type a line from the song…" autocomplete="off" autofocus />
+      <button class="go" type="submit">Search</button>
+    </form>
+  </header>
+
+  <main>
+    <div id="results"></div>
+    <div id="status" class="status">Search for something to get started.</div>
+    <div id="sentinel"></div>
+  </main>
+
+  <script>
+    const form = document.getElementById("form");
+    const input = document.getElementById("q");
+    const results = document.getElementById("results");
+    const statusEl = document.getElementById("status");
+    const sentinel = document.getElementById("sentinel");
+
+    const modeEl = document.getElementById("mode");
+    modeEl.addEventListener("change", () => {
+      input.placeholder = modeEl.value === "lyrics" ? "Type a line from the song…" : "Search a song or artist…";
+    });
+
+    let query = "";
+    let mode = "lyrics";
+    let nextOffset = null;   // null = no more pages
+    let loading = false;
+    let runId = 0;           // ignores responses from older searches
+
+    function setStatus(text, isError = false) {
+      statusEl.textContent = text;
+      statusEl.className = "status" + (isError ? " error" : "");
+    }
+
+    function el(tag, props = {}, ...kids) {
+      const n = Object.assign(document.createElement(tag), props);
+      kids.forEach((k) => n.append(k));
+      return n;
+    }
+
+    function renderSong(s) {
+      const thumb = s.image
+        ? el("img", { src: s.image, alt: s.album + " cover", loading: "lazy" })
+        : el("div", { className: "noimg" });
+
+      const open = el("a", { href: s.url, target: "_blank", rel: "noopener", textContent: "Open in Spotify" });
+      const play = el("button", { type: "button", textContent: "▶ Play here" });
+
+      const card = el("div", { className: "song" },
+        el("div", { className: "row" },
+          thumb,
+          el("div", { className: "info" },
+            el("div", { className: "name", textContent: s.name, title: s.name }),
+            el("div", { className: "meta", textContent: s.artists }),
+            el("div", { className: "actions" }, open, play)
+          )
+        )
+      );
+
+      // Spotify's official embed player, only created when clicked
+      let frame = null;
+      play.addEventListener("click", () => {
+        if (frame) { frame.remove(); frame = null; play.textContent = "▶ Play here"; return; }
+        frame = el("iframe", {
+          src: `https://open.spotify.com/embed/track/${s.id}`,
+          allow: "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture",
+          loading: "lazy",
+        });
+        card.append(frame);
+        play.textContent = "✕ Close player";
+      });
+      return card;
+    }
+
+    async function loadPage() {
+      if (loading || nextOffset === null || !query) return;
+      loading = true;
+      const myRun = runId;
+      setStatus("Loading…");
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&mode=${mode}&offset=${nextOffset}`);
+        const data = await res.json();
+        if (myRun !== runId) return;
+        if (!res.ok) throw new Error(data.error || "Something went wrong");
+
+        data.items.forEach((s) => results.append(renderSong(s)));
+        nextOffset = data.nextOffset;
+
+        if (!results.children.length && nextOffset !== null) { loading = false; return loadPage(); }
+        if (!results.children.length) setStatus("No songs found.");
+        else if (nextOffset === null) setStatus(`That's everything (${results.children.length} songs).`);
+        else setStatus("");
+      } catch (e) {
+        if (myRun === runId) setStatus(e.message, true);
+      } finally {
+        loading = false;
+        // if the sentinel is still on screen (tall monitor), keep filling
+        if (myRun === runId && nextOffset !== null && sentinel.getBoundingClientRect().top < innerHeight + 300) loadPage();
+      }
+    }
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (!q) return;
+      query = q;
+      mode = modeEl.value;
+      runId++;
+      loading = false;
+      nextOffset = 0;
+      results.replaceChildren();
+      loadPage();
+    });
+
+    // infinite scroll: load the next page when the bottom nears the viewport
+    new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) loadPage();
+    }, { rootMargin: "400px" }).observe(sentinel);
+  </script>
+</body>
+</html>
